@@ -9,7 +9,7 @@ Everything below is committed in the repo, so it reaches every teammate who clon
 
 **Permission rule.** `permissions.allow` lists only the read-only tools Claude actually needs: `mcp__docs__read_text_file`, `mcp__docs__list_directory` and `mcp__docs__search_files`. The write tools (`write_file`, `edit_file`, `move_file`, `create_directory`) are in `deny`, so the docs can only change through a normal reviewed edit, never through the server.
 
-**Using it.** The first real task for the server is "check `docs/api.md` against `routes/users.js` for `PUT /users/:id`". I ran it in a fresh Claude Code session (v2.1.331, macOS) on a fresh clone of this branch, after accepting the workspace trust prompt. Claude called `mcp__docs__list_allowed_directories` and then `mcp__docs__read_text_file` on `docs/api.md`, with no approval prompt, since those tools are in `allow`. `api.md` says the body may include `name`, `email` or both, with a `400` when neither is sent and a `404` for an unknown id. That matches the route. While checking, I noticed that `name: ""` is accepted and the docs don't say so. That is noted for a follow-up, not changed here.
+**Using it.** The first real task for the server is "check `docs/api.md` against `routes/users.js` for `PUT /users/:id`". I ran it in a fresh Claude Code session (v2.1.331, macOS) on a fresh clone of this branch, after accepting the workspace trust prompt. Claude called `mcp__docs__list_allowed_directories` and then `mcp__docs__read_text_file` on `docs/api.md`. `read_text_file` was pre-approved by `allow`. `list_allowed_directories` was not in `allow` at the time, and Claude Code's auto mode approved it as a read-only call. Since it is read-only and Claude reaches for it first, I have now added it to `allow` as well. The four write tools stay in `deny`. `api.md` says the body may include `name`, `email` or both, with a `400` when neither is sent and a `404` for an unknown id. That matches the route. While checking, I noticed that `name: ""` is accepted and the docs don't say so. That is noted for a follow-up, not changed here.
 
 ## 2. Skill: `.claude/skills/add-route/SKILL.md`
 **What it captures.** It records the way every route in this project is written:
@@ -61,6 +61,17 @@ claude -p "Add a test in tests/users.test.js for PUT /users/:id returning 400 wh
 
 Nothing else is pre-approved: no other Bash, no network and no git. With nobody watching, any other action has no approval and simply doesn't happen. `--max-turns` caps how long it can run. The PostToolUse lint hook also fires on its edit.
 
+**Effective permissions.** `--allowedTools` only adds grants. It does not remove grants that come from other settings files. Without other flags, a headless run therefore gets the union of `--allowedTools`, this repo's `.claude/settings.json` (the read-only docs tools, `npm test` and `npm run lint`) and the machine's user-level `~/.claude/settings.json`. To limit the run to the intended set and stop personal grants from leaking in, run it with project settings only:
+
+```
+claude -p "…same task…" \
+  --setting-sources project \
+  --allowedTools "Read,Edit(tests/**),Bash(npm test:*)" \
+  --max-turns 6
+```
+
+With that flag the effective set is `Read`, `Edit(tests/**)`, `Bash(npm test:*)`, plus the project's own read-only `allow` entries. The project `deny` list still applies, and the lint hook still runs on every edit. Any other tool has no grant, so in an unattended `-p` run it is refused rather than prompted.
+
 **Run.** I ran exactly this command from the root of a fresh clone. Claude read the route and the existing tests, added the test *"PUT /users/:id returns 400 when neither name nor email is sent"* in `tests/users.test.js`, and ran `npm test`, which passed 6 of 6. Afterwards I reverted the change, because the run was a demonstration.
 
-One thing I noticed: in a different headless run I made, Claude used `cat` through Bash even though it wasn't in that run's `--allowedTools`. My personal user-level settings allowed it, not the command. A truly locked-down unattended run should therefore also be checked against the user-level settings on the machine that runs it.
+That run used the default setting sources. In a different headless run on the same machine, Claude used `cat` through Bash even though it wasn't in that run's `--allowedTools`. My user-level settings allowed it. That is exactly the leak `--setting-sources project` closes, and it is why the version with that flag is the one to use unattended.
